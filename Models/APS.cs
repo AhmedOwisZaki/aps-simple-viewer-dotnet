@@ -10,4 +10,5 @@ public partial class APS
         _clientSecret = clientSecret;
         _bucket = string.IsNullOrEmpty(bucket) ? string.Format("{0}-basic-app", _clientId.ToLower()) : bucket;
     }
+
 }

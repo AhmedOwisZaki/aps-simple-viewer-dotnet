@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Autodesk.Authentication" Version="2.0.0" />
+    <PackageReference Include="Autodesk.Forge.Core" Version="4.0.0" />
     <PackageReference Include="Autodesk.ModelDerivative" Version="2.0.0" />
     <PackageReference Include="Autodesk.OSS" Version="2.0.0" />
   </ItemGroup>
