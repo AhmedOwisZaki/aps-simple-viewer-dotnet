@@ -4,7 +4,156 @@ initViewer(document.getElementById('preview')).then(viewer => {
     const urn = window.location.hash?.substring(1);
     setupModelSelection(viewer, urn);
     setupModelUpload(viewer);
+    setupMetadata(viewer);
 });
+
+async function setupMetadata(viewer) {
+    const btn = document.getElementById('metadata');
+    if (btn) {
+        btn.addEventListener('click', async () => {
+            const selection = viewer.getSelection();
+            if (selection.length !== 1) {
+                showNotification('Please select exactly one element to view its metadata. <br><br><button id="close-notification">Close</button>');
+                setTimeout(() => document.getElementById('close-notification')?.addEventListener('click', clearNotification), 0);
+                return;
+            }
+
+            const dbId = selection[0];
+            showNotification('Loading metadata...');
+
+            try {
+                // Get Properties
+                const props = await new Promise((resolve, reject) => {
+                    viewer.model.getProperties(dbId, resolve, reject);
+                });
+
+                // Get Geometry (Vertices)
+                const tree = viewer.model.getInstanceTree();
+                const frags = [];
+                tree.enumNodeFragments(dbId, (fragId) => {
+                    frags.push(fragId);
+                });
+
+                console.log(`Debug: Found ${frags.length} fragments for dbId ${dbId}`);
+
+                let geometryHtml = '';
+                let totalFaces = 0;
+
+                // Helper to apply matrix to vector
+                const applyMatrix = (v, m) => {
+                    const x = v.x * m.elements[0] + v.y * m.elements[4] + v.z * m.elements[8] + m.elements[12];
+                    const y = v.x * m.elements[1] + v.y * m.elements[5] + v.z * m.elements[9] + m.elements[13];
+                    const z = v.x * m.elements[2] + v.y * m.elements[6] + v.z * m.elements[10] + m.elements[14];
+                    return { x, y, z };
+                };
+
+                for (const fragId of frags) {
+                    const renderProxy = viewer.impl.getRenderProxy(viewer.model, fragId);
+                    console.log(`Debug: Processor fragment ${fragId}`, renderProxy);
+
+                    if (!renderProxy) {
+                        console.warn(`Debug: No renderProxy for fragment ${fragId}`);
+                        continue;
+                    }
+
+                    const mesh = renderProxy.mesh || renderProxy; // In some viewer versions, it might be renderProxy itself or renderProxy.geometry
+                    const geometry = renderProxy.geometry || mesh.geometry;
+
+                    console.log(`Debug: Mesh/Geometry for ${fragId}`, { mesh, geometry });
+
+                    if (!geometry) continue;
+
+                    let positions = geometry.attributes.position ? geometry.attributes.position.array : null;
+                    let indices = geometry.index ? geometry.index.array : null;
+                    let stride = 3;
+
+                    // Handle SVF2 / LeanBufferGeometry (packed buffers)
+                    if (!positions && geometry.vb) {
+                        positions = geometry.vb;
+                        stride = geometry.vbstride || 3;
+                    }
+                    if (!indices && geometry.ib) {
+                        indices = geometry.ib;
+                    }
+
+                    console.log(`Debug: Resolved geometry for ${fragId}`, { stride, hasPositions: !!positions, hasIndices: !!indices });
+
+                    if (indices && positions) {
+                        const faces = indices.length / 3;
+                        totalFaces += faces;
+
+                        if (totalFaces <= 50) { // Limit detailed display
+                            for (let i = 0; i < indices.length; i += 3) {
+                                const a = indices[i];
+                                const b = indices[i + 1];
+                                const c = indices[i + 2];
+
+                                // Account for stride in vertex buffer
+                                const vA = applyMatrix({ x: positions[a * stride], y: positions[a * stride + 1], z: positions[a * stride + 2] }, renderProxy.matrixWorld);
+                                const vB = applyMatrix({ x: positions[b * stride], y: positions[b * stride + 1], z: positions[b * stride + 2] }, renderProxy.matrixWorld);
+                                const vC = applyMatrix({ x: positions[c * stride], y: positions[c * stride + 1], z: positions[c * stride + 2] }, renderProxy.matrixWorld);
+
+                                geometryHtml += `
+                                    <div style="font-size: 0.8em; border-bottom: 1px solid #ccc; margin-bottom: 4px;">
+                                        <strong>Face ${Math.round(totalFaces - faces + (i / 3) + 1)}</strong>: <br>
+                                        (${vA.x.toFixed(2)}, ${vA.y.toFixed(2)}, ${vA.z.toFixed(2)}) <br>
+                                        (${vB.x.toFixed(2)}, ${vB.y.toFixed(2)}, ${vB.z.toFixed(2)}) <br>
+                                        (${vC.x.toFixed(2)}, ${vC.y.toFixed(2)}, ${vC.z.toFixed(2)})
+                                    </div>`;
+                            }
+                        }
+                    } else if (positions) {
+                        // Non-indexed geometry
+                        const faces = positions.length / (stride * 3);
+                        totalFaces += faces;
+
+                        if (totalFaces <= 50) {
+                            for (let i = 0; i < positions.length; i += stride * 3) {
+                                const vA = applyMatrix({ x: positions[i], y: positions[i + 1], z: positions[i + 2] }, renderProxy.matrixWorld);
+                                const vB = applyMatrix({ x: positions[i + stride], y: positions[i + stride + 1], z: positions[i + stride + 2] }, renderProxy.matrixWorld);
+                                const vC = applyMatrix({ x: positions[i + stride * 2], y: positions[i + stride * 2 + 1], z: positions[i + stride * 2 + 2] }, renderProxy.matrixWorld);
+
+                                geometryHtml += `
+                                    <div style="font-size: 0.8em; border-bottom: 1px solid #ccc; margin-bottom: 4px;">
+                                        <strong>Face ${Math.round(totalFaces - faces + (i / (stride * 3)) + 1)}</strong>: <br>
+                                        (${vA.x.toFixed(2)}, ${vA.y.toFixed(2)}, ${vA.z.toFixed(2)}) <br>
+                                        (${vB.x.toFixed(2)}, ${vB.y.toFixed(2)}, ${vB.z.toFixed(2)}) <br>
+                                        (${vC.x.toFixed(2)}, ${vC.y.toFixed(2)}, ${vC.z.toFixed(2)})
+                                    </div>`;
+                            }
+                        }
+                    }
+                }
+
+                if (totalFaces > 50) {
+                    geometryHtml += `<p>... and ${totalFaces - 50} more faces.</p>`;
+                }
+
+                showNotification(`
+                    <div style="max-height: 400px; overflow-y: auto; text-align: left;">
+                        <h3>${props.name} (ID: ${dbId})</h3>
+                        <h4>Properties</h4>
+                        <ul>
+                            ${props.properties.map(p => `<li><strong>${p.displayName}:</strong> ${p.displayValue}</li>`).join('')}
+                        </ul>
+                        <h4>Geometry</h4>
+                        <p>Total Faces: ${totalFaces}</p>
+                        ${geometryHtml}
+                        <br>
+                        <button id="close-notification">Close</button>
+                    </div>
+                `);
+
+                setTimeout(() => document.getElementById('close-notification')?.addEventListener('click', clearNotification), 0);
+
+            } catch (err) {
+                console.error('Metadata extraction failed', err);
+                showNotification(`Error: ${err.message} <br><button id="close-notification">Close</button>`);
+                setTimeout(() => document.getElementById('close-notification')?.addEventListener('click', clearNotification), 0);
+            }
+        });
+    }
+}
 
 async function setupModelSelection(viewer, selectedUrn) {
     const dropdown = document.getElementById('models');
@@ -87,7 +236,7 @@ async function onModelSelected(viewer, urn) {
             default:
                 clearNotification();
                 loadModel(viewer, urn);
-                break; 
+                break;
         }
     } catch (err) {
         alert('Could not load model. See the console for more details.');
