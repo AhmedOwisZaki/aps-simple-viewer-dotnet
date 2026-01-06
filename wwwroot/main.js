@@ -47,6 +47,8 @@ async function setupMetadata(viewer) {
                     return { x, y, z };
                 };
 
+                let allGeometryData = [];
+
                 for (const fragId of frags) {
                     const renderProxy = viewer.impl.getRenderProxy(viewer.model, fragId);
                     console.log(`Debug: Processor fragment ${fragId}`, renderProxy);
@@ -56,10 +58,38 @@ async function setupMetadata(viewer) {
                         continue;
                     }
 
-                    const mesh = renderProxy.mesh || renderProxy; // In some viewer versions, it might be renderProxy itself or renderProxy.geometry
+                    const mesh = renderProxy.mesh || renderProxy;
                     const geometry = renderProxy.geometry || mesh.geometry;
+                    const material = renderProxy.material || mesh.material;
 
-                    console.log(`Debug: Mesh/Geometry for ${fragId}`, { mesh, geometry });
+                    let materialInfo = 'Unknown Material';
+                    let matName = material ? material.name : null;
+
+                    // Fallback: Check properties if material name is missing or generic
+                    if ((!matName || matName.startsWith('Unnamed')) && props && props.properties) {
+                        // Look for a property containing "Material" in its name
+                        const materialProp = props.properties.find(p => p.displayName && p.displayName.toLowerCase().includes('material'));
+                        if (materialProp) {
+                            matName = materialProp.displayValue;
+                        }
+                    }
+
+                    if (!matName) matName = 'Unnamed Material';
+
+                    if (material) {
+                        const matId = material.id ? `(ID: ${material.id})` : '(No ID)';
+                        materialInfo = `${matName} ${matId}`;
+
+                        if (material.color) {
+                            materialInfo += ` (Color: #${material.color.getHexString()})`;
+                        }
+                        // Detailed debug of the material object to understand why name might be missing
+                        console.log(`Debug: Material Object Detail for frag ${fragId}`, material);
+                    } else {
+                        materialInfo = matName; // If we found it in props but have no 3D material
+                    }
+
+                    console.log(`Debug: Mesh/Geometry/Material for ${fragId}`, { mesh, geometry, material });
 
                     if (!geometry) continue;
 
@@ -79,55 +109,80 @@ async function setupMetadata(viewer) {
                     console.log(`Debug: Resolved geometry for ${fragId}`, { stride, hasPositions: !!positions, hasIndices: !!indices });
 
                     if (indices && positions) {
-                        const faces = indices.length / 3;
-                        totalFaces += faces;
+                        const facesCount = indices.length / 3;
+                        totalFaces += facesCount;
 
-                        if (totalFaces <= 50) { // Limit detailed display
-                            for (let i = 0; i < indices.length; i += 3) {
-                                const a = indices[i];
-                                const b = indices[i + 1];
-                                const c = indices[i + 2];
+                        for (let i = 0; i < indices.length; i += 3) {
+                            const a = indices[i];
+                            const b = indices[i + 1];
+                            const c = indices[i + 2];
 
-                                // Account for stride in vertex buffer
-                                const vA = applyMatrix({ x: positions[a * stride], y: positions[a * stride + 1], z: positions[a * stride + 2] }, renderProxy.matrixWorld);
-                                const vB = applyMatrix({ x: positions[b * stride], y: positions[b * stride + 1], z: positions[b * stride + 2] }, renderProxy.matrixWorld);
-                                const vC = applyMatrix({ x: positions[c * stride], y: positions[c * stride + 1], z: positions[c * stride + 2] }, renderProxy.matrixWorld);
+                            // Account for stride in vertex buffer
+                            const vA = applyMatrix({ x: positions[a * stride], y: positions[a * stride + 1], z: positions[a * stride + 2] }, renderProxy.matrixWorld);
+                            const vB = applyMatrix({ x: positions[b * stride], y: positions[b * stride + 1], z: positions[b * stride + 2] }, renderProxy.matrixWorld);
+                            const vC = applyMatrix({ x: positions[c * stride], y: positions[c * stride + 1], z: positions[c * stride + 2] }, renderProxy.matrixWorld);
 
-                                geometryHtml += `
-                                    <div style="font-size: 0.8em; border-bottom: 1px solid #ccc; margin-bottom: 4px;">
-                                        <strong>Face ${Math.round(totalFaces - faces + (i / 3) + 1)}</strong>: <br>
-                                        (${vA.x.toFixed(2)}, ${vA.y.toFixed(2)}, ${vA.z.toFixed(2)}) <br>
-                                        (${vB.x.toFixed(2)}, ${vB.y.toFixed(2)}, ${vB.z.toFixed(2)}) <br>
-                                        (${vC.x.toFixed(2)}, ${vC.y.toFixed(2)}, ${vC.z.toFixed(2)})
-                                    </div>`;
-                            }
+                            const faceIndex = Math.round(totalFaces - facesCount + (i / 3) + 1);
+
+                            const faceData = {
+                                faceIndex: faceIndex,
+                                vertices: [vA, vB, vC],
+                                material: materialInfo
+                            };
+                            allGeometryData.push(faceData);
+
+                            geometryHtml += `
+                                <div style="font-size: 0.8em; border-bottom: 1px solid #ccc; margin-bottom: 4px;">
+                                    <strong>Face ${faceIndex}</strong> - <em>${materialInfo}</em>: <br>
+                                    (${vA.x.toFixed(2)}, ${vA.y.toFixed(2)}, ${vA.z.toFixed(2)}) <br>
+                                    (${vB.x.toFixed(2)}, ${vB.y.toFixed(2)}, ${vB.z.toFixed(2)}) <br>
+                                    (${vC.x.toFixed(2)}, ${vC.y.toFixed(2)}, ${vC.z.toFixed(2)})
+                                </div>`;
                         }
                     } else if (positions) {
                         // Non-indexed geometry
-                        const faces = positions.length / (stride * 3);
-                        totalFaces += faces;
+                        const facesCount = positions.length / (stride * 3);
+                        totalFaces += facesCount;
 
-                        if (totalFaces <= 50) {
-                            for (let i = 0; i < positions.length; i += stride * 3) {
-                                const vA = applyMatrix({ x: positions[i], y: positions[i + 1], z: positions[i + 2] }, renderProxy.matrixWorld);
-                                const vB = applyMatrix({ x: positions[i + stride], y: positions[i + stride + 1], z: positions[i + stride + 2] }, renderProxy.matrixWorld);
-                                const vC = applyMatrix({ x: positions[i + stride * 2], y: positions[i + stride * 2 + 1], z: positions[i + stride * 2 + 2] }, renderProxy.matrixWorld);
+                        for (let i = 0; i < positions.length; i += stride * 3) {
+                            const vA = applyMatrix({ x: positions[i], y: positions[i + 1], z: positions[i + 2] }, renderProxy.matrixWorld);
+                            const vB = applyMatrix({ x: positions[i + stride], y: positions[i + stride + 1], z: positions[i + stride + 2] }, renderProxy.matrixWorld);
+                            const vC = applyMatrix({ x: positions[i + stride * 2], y: positions[i + stride * 2 + 1], z: positions[i + stride * 2 + 2] }, renderProxy.matrixWorld);
 
-                                geometryHtml += `
-                                    <div style="font-size: 0.8em; border-bottom: 1px solid #ccc; margin-bottom: 4px;">
-                                        <strong>Face ${Math.round(totalFaces - faces + (i / (stride * 3)) + 1)}</strong>: <br>
-                                        (${vA.x.toFixed(2)}, ${vA.y.toFixed(2)}, ${vA.z.toFixed(2)}) <br>
-                                        (${vB.x.toFixed(2)}, ${vB.y.toFixed(2)}, ${vB.z.toFixed(2)}) <br>
-                                        (${vC.x.toFixed(2)}, ${vC.y.toFixed(2)}, ${vC.z.toFixed(2)})
-                                    </div>`;
-                            }
+                            const faceIndex = Math.round(totalFaces - facesCount + (i / (stride * 3)) + 1);
+
+                            const faceData = {
+                                faceIndex: faceIndex,
+                                vertices: [vA, vB, vC],
+                                material: materialInfo
+                            };
+                            allGeometryData.push(faceData);
+
+                            geometryHtml += `
+                                <div style="font-size: 0.8em; border-bottom: 1px solid #ccc; margin-bottom: 4px;">
+                                    <strong>Face ${faceIndex}</strong> - <em>${materialInfo}</em>: <br>
+                                    (${vA.x.toFixed(2)}, ${vA.y.toFixed(2)}, ${vA.z.toFixed(2)}) <br>
+                                    (${vB.x.toFixed(2)}, ${vB.y.toFixed(2)}, ${vB.z.toFixed(2)}) <br>
+                                    (${vC.x.toFixed(2)}, ${vC.y.toFixed(2)}, ${vC.z.toFixed(2)})
+                                </div>`;
                         }
                     }
                 }
 
-                if (totalFaces > 50) {
-                    geometryHtml += `<p>... and ${totalFaces - 50} more faces.</p>`;
-                }
+                // Log comprehensive metadata to console
+                const completeMetadata = {
+                    dbId: dbId,
+                    name: props.name,
+                    properties: props.properties,
+                    totalFaces: totalFaces,
+                    geometryData: allGeometryData
+                };
+
+                console.log("==================================================");
+                console.log(`METADATA FOR ELEMENT ID: ${dbId} (${props.name})`);
+                console.log("--------------------------------------------------");
+                console.log(completeMetadata);
+                console.log("==================================================");
 
                 showNotification(`
                     <div style="max-height: 400px; overflow-y: auto; text-align: left;">
